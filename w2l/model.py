@@ -59,6 +59,11 @@ class W2L:
                 n_f, w_f, stride, padding="same", data_format=self.data_format,
                 use_bias=False)
 
+        def conv1d_t(n_f, w_f, stride):
+            return Conv1DTranspose(
+                n_f, w_f, stride, padding="same", data_format=self.data_format,
+                use_bias=False)
+
         def act():
             return layers.ReLU()
 
@@ -97,45 +102,47 @@ class W2L:
             conv1d(2048, 1, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            layers.Conv1D(self.hidden_dim, 1, 1, "same", self.data_format)
+            layers.Conv1D(self.hidden_dim, 1, 1, padding="same",
+                          data_format=self.data_format)
         ]
 
         layer_list_dec = [
             layers.BatchNormalization(channel_ax),
-            conv1d(2048, 1, 1),
+            conv1d_t(2048, 1, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(2048, 1, 1),
+            conv1d_t(2048, 1, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 32, 1),
+            conv1d_t(256, 32, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(256, 7, 1),
+            conv1d_t(256, 7, 1),
             layers.BatchNormalization(channel_ax),
             act(),
-            conv1d(1, 48, 2)
+            Conv1DTranspose(128, 48, 2, padding="same",
+                            data_format=self.data_format)
         ]
 
         # w2l = tf.keras.Sequential(layer_list, name="w2l")
@@ -150,8 +157,8 @@ class W2L:
             layer_outputs_dec.append(layer(layer_outputs_dec[-1]))
 
         # only include relu layers in outputs
-        relevant = layer_outputs_enc[4::3] + layer_outputs_enc[-1]
-        relevant += layer_outputs_dec[4::3] + layer_outputs_dec[-1]
+        relevant = layer_outputs_enc[4::3] + [layer_outputs_enc[-1]]
+        relevant += layer_outputs_dec[4::3] + [layer_outputs_dec[-1]]
 
         w2l = tf.keras.Model(inputs=inp, outputs=relevant)
 
@@ -187,8 +194,6 @@ class W2L:
         Parameters:
             audio: Tensor of mel spectrograms, channels_first!
             audio_length: "True" length of each audio clip.
-            transcrs: Tensor of transcriptions (indices).
-            transcr_length: "True" length of each transcription.
             optimizer: Optimizer instance to do training with.
             on_gpu: Bool, whether running on GPU. This changes how the
                     transcriptions are handled. Currently ignored!!
@@ -202,7 +207,7 @@ class W2L:
             # after this we need logits in shape time x batch_size x vocab_size
             # TODO mask, i.e. do not compute for padding
             loss = tf.reduce_mean(tf.math.squared_difference(recon, audio))
-            #audio_length = tf.cast(audio_length / 2, tf.int32)
+            # audio_length = tf.cast(audio_length / 2, tf.int32)
 
         grads = tape.gradient(loss, self.model.trainable_variables)
         optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
@@ -359,6 +364,7 @@ def dense_to_sparse(dense_tensor, sparse_val=-1):
 
 class Conv1DTranspose(layers.Conv1D):
     """Why does this still not exist in Keras... """
+
     def __init__(self,
                  filters,
                  kernel_size,
@@ -390,14 +396,15 @@ class Conv1DTranspose(layers.Conv1D):
             bias_initializer=tf.keras.initializers.get(bias_initializer),
             kernel_regularizer=tf.keras.regularizers.get(kernel_regularizer),
             bias_regularizer=tf.keras.regularizers.get(bias_regularizer),
-            activity_regularizer=tf.keras.regularizers.get(activity_regularizer),
+            activity_regularizer=tf.keras.regularizers.get(
+                activity_regularizer),
             kernel_constraint=tf.keras.constraints.get(kernel_constraint),
             bias_constraint=tf.keras.constraints.get(bias_constraint),
             **kwargs)
 
         self.output_padding = output_padding
         if self.output_padding is not None:
-            self.output_padding = tf.python.keras.utils.conv_utils.normalize_tuple(
+            self.output_padding = normalize_tuple(
                 self.output_padding, 1, 'output_padding')
             for stride, out_pad in zip(self.strides, self.output_padding):
                 if out_pad >= stride:
@@ -416,7 +423,7 @@ class Conv1DTranspose(layers.Conv1D):
             raise ValueError('The channel dimension of the inputs '
                              'should be defined. Found `None`.')
         input_dim = int(input_shape[channel_axis])
-        self.input_spec = tf.python.keras.engine.input_spec.InputSpec(ndim=3, axes={channel_axis: input_dim})
+        self.input_spec = InputSpec(ndim=3, axes={channel_axis: input_dim})
         kernel_shape = self.kernel_size + (self.filters, input_dim)
 
         self.kernel = self.add_weight(
@@ -458,13 +465,13 @@ class Conv1DTranspose(layers.Conv1D):
             out_pad_h, out_pad_w = self.output_padding
 
         # Infer the dynamic output shape:
-        out_height = tf.python.keras.utils.conv_utils.deconv_output_length(height,
-                                                     kernel_h,
-                                                     padding=self.padding,
-                                                     output_padding=out_pad_h,
-                                                     stride=stride_h,
-                                                     dilation=
-                                                     self.dilation_rate[0])
+        out_height = deconv_output_length(height,
+                                          kernel_h,
+                                          padding=self.padding,
+                                          output_padding=out_pad_h,
+                                          stride=stride_h,
+                                          dilation=
+                                          self.dilation_rate[0])
         if self.data_format == 'channels_first':
             output_shape = (batch_size, self.filters, out_height)
         else:
@@ -489,8 +496,8 @@ class Conv1DTranspose(layers.Conv1D):
             outputs = tf.nn.bias_add(
                 outputs,
                 self.bias,
-                data_format=tf.python.keras.utils.conv_utils.convert_data_format(self.data_format,
-                                                           ndim=3))
+                data_format=convert_data_format(self.data_format,
+                                                ndim=3))
 
         if self.activation is not None:
             return self.activation(outputs)
@@ -513,7 +520,7 @@ class Conv1DTranspose(layers.Conv1D):
             out_pad_h = self.output_padding
 
         output_shape[c_axis] = self.filters
-        output_shape[h_axis] = tf.python.keras.utils.conv_utils.deconv_output_length(
+        output_shape[h_axis] = deconv_output_length(
             output_shape[h_axis],
             kernel_h,
             padding=self.padding,
@@ -526,3 +533,182 @@ class Conv1DTranspose(layers.Conv1D):
         config = super(Conv1DTranspose, self).get_config()
         config['output_padding'] = self.output_padding
         return config
+
+
+def normalize_tuple(value, n, name):
+    """Transforms a single integer or iterable of integers into an integer tuple.
+    Arguments:
+      value: The value to validate and convert. Could an int, or any iterable of
+        ints.
+      n: The size of the tuple to be returned.
+      name: The name of the argument being validated, e.g. "strides" or
+        "kernel_size". This is only used to format error messages.
+    Returns:
+      A tuple of n integers.
+    Raises:
+      ValueError: If something else than an int/long or iterable thereof was
+        passed.
+    """
+    if isinstance(value, int):
+        return (value,) * n
+    else:
+        try:
+            value_tuple = tuple(value)
+        except TypeError:
+            raise ValueError('The `' + name + '` argument must be a tuple of ' +
+                             str(n) + ' integers. Received: ' + str(value))
+        if len(value_tuple) != n:
+            raise ValueError('The `' + name + '` argument must be a tuple of ' +
+                             str(n) + ' integers. Received: ' + str(value))
+        for single_value in value_tuple:
+            try:
+                int(single_value)
+            except (ValueError, TypeError):
+                raise ValueError(
+                    'The `' + name + '` argument must be a tuple of ' +
+                    str(n) + ' integers. Received: ' + str(value) + ' '
+                                                                    'including element ' + str(
+                        single_value) + ' of type' +
+                    ' ' + str(type(single_value)))
+        return value_tuple
+
+
+def convert_data_format(data_format, ndim):
+    if data_format == 'channels_last':
+        if ndim == 3:
+            return 'NWC'
+        elif ndim == 4:
+            return 'NHWC'
+        elif ndim == 5:
+            return 'NDHWC'
+        else:
+            raise ValueError('Input rank not supported:', ndim)
+    elif data_format == 'channels_first':
+        if ndim == 3:
+            return 'NCW'
+        elif ndim == 4:
+            return 'NCHW'
+        elif ndim == 5:
+            return 'NCDHW'
+        else:
+            raise ValueError('Input rank not supported:', ndim)
+    else:
+        raise ValueError('Invalid data_format:', data_format)
+
+
+def deconv_output_length(input_length,
+                         filter_size,
+                         padding,
+                         output_padding=None,
+                         stride=0,
+                         dilation=1):
+    """Determines output length of a transposed convolution given input length.
+    Arguments:
+        input_length: Integer.
+        filter_size: Integer.
+        padding: one of `"same"`, `"valid"`, `"full"`.
+        output_padding: Integer, amount of padding along the output dimension. Can
+          be set to `None` in which case the output length is inferred.
+        stride: Integer.
+        dilation: Integer.
+    Returns:
+        The output length (integer).
+    """
+    assert padding in {'same', 'valid', 'full'}
+    if input_length is None:
+        return None
+
+    # Get the dilated kernel size
+    filter_size = filter_size + (filter_size - 1) * (dilation - 1)
+
+    # Infer length if output padding is None, else compute the exact length
+    if output_padding is None:
+        if padding == 'valid':
+            length = input_length * stride + max(filter_size - stride, 0)
+        elif padding == 'full':
+            length = input_length * stride - (stride + filter_size - 2)
+        elif padding == 'same':
+            length = input_length * stride
+
+    else:
+        if padding == 'same':
+            pad = filter_size // 2
+        elif padding == 'valid':
+            pad = 0
+        elif padding == 'full':
+            pad = filter_size - 1
+
+        length = ((input_length - 1) * stride + filter_size - 2 * pad +
+                  output_padding)
+    return length
+
+
+class InputSpec(object):
+    """Specifies the ndim, dtype and shape of every input to a layer.
+    Every layer should expose (if appropriate) an `input_spec` attribute:
+    a list of instances of InputSpec (one per input tensor).
+    A None entry in a shape is compatible with any dimension,
+    a None shape is compatible with any shape.
+    Arguments:
+        dtype: Expected DataType of the input.
+        shape: Shape tuple, expected shape of the input
+            (may include None for unchecked axes).
+        ndim: Integer, expected rank of the input.
+        max_ndim: Integer, maximum rank of the input.
+        min_ndim: Integer, minimum rank of the input.
+        axes: Dictionary mapping integer axes to
+            a specific dimension value.
+    """
+
+    def __init__(self,
+                 dtype=None,
+                 shape=None,
+                 ndim=None,
+                 max_ndim=None,
+                 min_ndim=None,
+                 axes=None):
+        self.dtype = tf.dtypes.as_dtype(
+            dtype).name if dtype is not None else None
+        if shape is not None:
+            self.ndim = len(shape)
+            self.shape = shape
+        else:
+            self.ndim = ndim
+            self.shape = None
+        self.max_ndim = max_ndim
+        self.min_ndim = min_ndim
+        try:
+            axes = axes or {}
+            self.axes = {int(k): axes[k] for k in axes}
+        except (ValueError, TypeError):
+            raise TypeError('The keys in axes must be integers.')
+
+        if self.axes and (self.ndim is not None or self.max_ndim is not None):
+            max_dim = (self.ndim if self.ndim else self.max_ndim) - 1
+            max_axis = max(self.axes)
+            if max_axis > max_dim:
+                raise ValueError(
+                    'Axis {} is greater than the maximum allowed value: {}'
+                    .format(max_axis, max_dim))
+
+    def __repr__(self):
+        spec = [('dtype=' + str(self.dtype)) if self.dtype else '',
+                ('shape=' + str(self.shape)) if self.shape else '',
+                ('ndim=' + str(self.ndim)) if self.ndim else '',
+                ('max_ndim=' + str(self.max_ndim)) if self.max_ndim else '',
+                ('min_ndim=' + str(self.min_ndim)) if self.min_ndim else '',
+                ('axes=' + str(self.axes)) if self.axes else '']
+        return 'InputSpec(%s)' % ', '.join(x for x in spec if x)
+
+    def get_config(self):
+        return {
+            'dtype': self.dtype,
+            'shape': self.shape,
+            'ndim': self.ndim,
+            'max_ndim': self.max_ndim,
+            'min_ndim': self.min_ndim,
+            'axes': self.axes}
+
+    @classmethod
+    def from_config(cls, config):
+        return cls(**config)
