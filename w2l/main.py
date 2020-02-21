@@ -53,26 +53,12 @@ def run_asr(mode, data_config, model_dir, data_format="channels_first",
     elif mode == "predict" or mode == "errors":
         def gen():
             for features, labels in dataset:
-                pred_batch, layer_list = model.decode(
-                    features["audio"], features["length"],
-                    return_intermediate=True)
-                pred_batch = pred_batch.numpy()
-                label_batch = labels["transcription"].numpy()
+                layer_list = model.forward(
+                    features["audio"], return_all=True)
 
-                for ind in range(pred_batch.shape[0]):
+                for ind in range(layer_list.shape[0]):
                     predictions_repacked = dict()
                     predictions_repacked["input_length"] = features["length"][ind]
-
-                    # remove padding/blank and convert to chars
-                    pred = pred_batch[ind]
-                    # TODO why are there blank labels here???
-                    pred = [ind for ind in pred if ind != -1 and ind != 0]
-                    pred_ch = "".join([ind_to_ch[ind] for ind in pred])
-                    predictions_repacked["decoding"] = pred_ch
-
-                    true_ind = [t for t in label_batch[ind] if t != -1]
-                    true_ch = "".join([ind_to_ch[ind] for ind in true_ind])
-                    predictions_repacked["true"] = true_ch
 
                     predictions_repacked["all_layers"] = [layer[ind] for
                                                           layer in layer_list]

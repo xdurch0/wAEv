@@ -423,7 +423,7 @@ class Conv1DTranspose(layers.Conv1D):
             raise ValueError('The channel dimension of the inputs '
                              'should be defined. Found `None`.')
         input_dim = int(input_shape[channel_axis])
-        self.input_spec = InputSpec(ndim=3, axes={channel_axis: input_dim})
+        self.input_spec = layers.InputSpec(ndim=3, axes={channel_axis: input_dim})
         kernel_shape = self.kernel_size + (self.filters, input_dim)
 
         self.kernel = self.add_weight(
@@ -456,8 +456,8 @@ class Conv1DTranspose(layers.Conv1D):
             h_axis = 1
 
         height = inputs_shape[h_axis]
-        kernel_h = self.kernel_size
-        stride_h = self.strides
+        kernel_h, = self.kernel_size
+        stride_h, = self.strides
 
         if self.output_padding is None:
             out_pad_h = out_pad_w = None
@@ -471,7 +471,7 @@ class Conv1DTranspose(layers.Conv1D):
                                           output_padding=out_pad_h,
                                           stride=stride_h,
                                           dilation=
-                                          self.dilation_rate[0])
+                                          self.dilation_rate)
         if self.data_format == 'channels_first':
             output_shape = (batch_size, self.filters, out_height)
         else:
@@ -484,8 +484,9 @@ class Conv1DTranspose(layers.Conv1D):
             output_shape_tensor,
             strides=self.strides,
             padding=self.padding,
-            data_format=self.data_format,
-            dilation_rate=self.dilation_rate)
+            data_format=convert_data_format(self.data_format,
+                                                ndim=3),
+            dilations=self.dilation_rate)
 
         if not tf.executing_eagerly():
             # Infer the static output shape:
@@ -511,8 +512,8 @@ class Conv1DTranspose(layers.Conv1D):
         else:
             c_axis, h_axis = 2, 1
 
-        kernel_h, kernel_w = self.kernel_size
-        stride_h, stride_w = self.strides
+        kernel_h, = self.kernel_size
+        stride_h, = self.strides
 
         if self.output_padding is None:
             out_pad_h = None
@@ -641,74 +642,3 @@ def deconv_output_length(input_length,
         length = ((input_length - 1) * stride + filter_size - 2 * pad +
                   output_padding)
     return length
-
-
-class InputSpec(object):
-    """Specifies the ndim, dtype and shape of every input to a layer.
-    Every layer should expose (if appropriate) an `input_spec` attribute:
-    a list of instances of InputSpec (one per input tensor).
-    A None entry in a shape is compatible with any dimension,
-    a None shape is compatible with any shape.
-    Arguments:
-        dtype: Expected DataType of the input.
-        shape: Shape tuple, expected shape of the input
-            (may include None for unchecked axes).
-        ndim: Integer, expected rank of the input.
-        max_ndim: Integer, maximum rank of the input.
-        min_ndim: Integer, minimum rank of the input.
-        axes: Dictionary mapping integer axes to
-            a specific dimension value.
-    """
-
-    def __init__(self,
-                 dtype=None,
-                 shape=None,
-                 ndim=None,
-                 max_ndim=None,
-                 min_ndim=None,
-                 axes=None):
-        self.dtype = tf.dtypes.as_dtype(
-            dtype).name if dtype is not None else None
-        if shape is not None:
-            self.ndim = len(shape)
-            self.shape = shape
-        else:
-            self.ndim = ndim
-            self.shape = None
-        self.max_ndim = max_ndim
-        self.min_ndim = min_ndim
-        try:
-            axes = axes or {}
-            self.axes = {int(k): axes[k] for k in axes}
-        except (ValueError, TypeError):
-            raise TypeError('The keys in axes must be integers.')
-
-        if self.axes and (self.ndim is not None or self.max_ndim is not None):
-            max_dim = (self.ndim if self.ndim else self.max_ndim) - 1
-            max_axis = max(self.axes)
-            if max_axis > max_dim:
-                raise ValueError(
-                    'Axis {} is greater than the maximum allowed value: {}'
-                    .format(max_axis, max_dim))
-
-    def __repr__(self):
-        spec = [('dtype=' + str(self.dtype)) if self.dtype else '',
-                ('shape=' + str(self.shape)) if self.shape else '',
-                ('ndim=' + str(self.ndim)) if self.ndim else '',
-                ('max_ndim=' + str(self.max_ndim)) if self.max_ndim else '',
-                ('min_ndim=' + str(self.min_ndim)) if self.min_ndim else '',
-                ('axes=' + str(self.axes)) if self.axes else '']
-        return 'InputSpec(%s)' % ', '.join(x for x in spec if x)
-
-    def get_config(self):
-        return {
-            'dtype': self.dtype,
-            'shape': self.shape,
-            'ndim': self.ndim,
-            'max_ndim': self.max_ndim,
-            'min_ndim': self.min_ndim,
-            'axes': self.axes}
-
-    @classmethod
-    def from_config(cls, config):
-        return cls(**config)

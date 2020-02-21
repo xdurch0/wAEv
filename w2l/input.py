@@ -133,7 +133,7 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
     length = np.int32(array.shape[-1])
     trans_length = np.int32(len(trans_mapped))
 
-    if len(array) % 2:
+    if array.shape[1] % 2:
         array = np.pad(array, ((0, 0), (0, 1)), mode="constant",
                        constant_values=np.log(1e-11))
 
