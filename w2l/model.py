@@ -6,6 +6,8 @@ import tensorflow as tf
 import tensorflow.keras.layers as layers
 import tensorflow_probability as tfp
 import numpy as np
+import librosa
+import ddsp
 
 GRIDS = {16: (4, 4), 32: (8, 4), 64: (8, 8), 128: (16, 8), 256: (16, 16),
          512: (32, 16), 1024: (32, 32), 2048: (64, 32)}
@@ -23,7 +25,7 @@ class W2L:
         self.cf = self.data_format == "channels_first"
         self.n_channels = n_channels
         self.vocab_size = vocab_size
-        self.hidden_dim = 16  # TODO don't hardcode
+        self.hidden_dim = 48  # TODO don't hardcode
 
         if os.path.isdir(model_dir) and os.listdir(model_dir):
             print("Model directory already exists. Loading last model...")
@@ -107,45 +109,6 @@ class W2L:
                           data_format=self.data_format)
         ]
 
-        layer_list_dec = [
-            layers.BatchNormalization(channel_ax),
-            conv1d_t(2048, 1, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(2048, 1, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 32, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            conv1d_t(256, 7, 1),
-            layers.BatchNormalization(channel_ax),
-            act(),
-            Conv1DTranspose(128, 48, 2, padding="same",
-                            data_format=self.data_format)
-        ]
-
         # w2l = tf.keras.Sequential(layer_list, name="w2l")
 
         inp = tf.keras.Input((self.n_channels, None) if self.cf
@@ -153,13 +116,9 @@ class W2L:
         layer_outputs_enc = [inp]
         for layer in layer_list_enc:
             layer_outputs_enc.append(layer(layer_outputs_enc[-1]))
-        layer_outputs_dec = [layer_outputs_enc[-1]]
-        for layer in layer_list_dec:
-            layer_outputs_dec.append(layer(layer_outputs_dec[-1]))
 
         # only include relu layers in outputs
         relevant = layer_outputs_enc[4::3] + [layer_outputs_enc[-1]]
-        relevant += layer_outputs_dec[4::3] + [layer_outputs_dec[-1]]
 
         w2l = tf.keras.Model(inputs=inp, outputs=relevant)
 
@@ -184,10 +143,17 @@ class W2L:
             audio = tf.transpose(audio, [0, 2, 1])
 
         out = self.model(audio, training=training)
+        # TODO data format, hop size
+        synth = ddsp.synths.Additive((int(audio.shape[-1])-1)*160)
+
+        amps, harm, f0 = tf.split(tf.transpose(out[-1], [0, 2, 1]), 3, axis=2)
+        f0 = 300*tf.nn.sigmoid(f0)
+        recon = synth(amps, harm, f0)
+
         if return_all:
-            return out
+            return out + [recon]
         else:
-            return out[-1]
+            return recon
 
     def train_step(self, audio, audio_length, optimizer, on_gpu):
         """Implements train step of the W2L model.
@@ -207,7 +173,9 @@ class W2L:
             recon = self.forward(audio, training=True, return_all=False)
             # after this we need logits in shape time x batch_size x vocab_size
             # TODO mask, i.e. do not compute for padding
-            loss = tf.reduce_mean(tf.math.squared_difference(recon, audio))
+            tospec = raw_tf_mel(recon, 16000, 400, 160, 128)
+            
+            loss = tf.reduce_mean(tf.math.squared_difference(tospec, audio))
             # audio_length = tf.cast(audio_length / 2, tf.int32)
 
         grads = tape.gradient(loss, self.model.trainable_variables)
@@ -248,10 +216,10 @@ class W2L:
         def train_fn(w, x):
             return self.train_step(w, x, opt, on_gpu)
 
-        graph_train = tf.function(
-            train_fn, input_signature=[tf.TensorSpec(audio_shape, tf.float32),
-                                       tf.TensorSpec([None], tf.int32)])
-        # graph_train = train_fn  # skip tf.function
+        #graph_train = tf.function(
+        #    train_fn, input_signature=[tf.TensorSpec(audio_shape, tf.float32),
+        #                               tf.TensorSpec([None], tf.int32)])
+        graph_train = train_fn  # skip tf.function
 
         start = time.time()
         for features, labels in data_step_limited:
@@ -641,3 +609,12 @@ def deconv_output_length(input_length,
         length = ((input_length - 1) * stride + filter_size - 2 * pad +
                   output_padding)
     return length
+
+
+def raw_tf_mel(inp_batch, sr, wl, hl, nf):
+    melmat = tf.convert_to_tensor(librosa.filters.mel(sr, wl, nf).T)
+    inp = tf.pad(inp_batch, [[0, 0, ], [wl//2, wl//2]], mode="reflect")
+    spec = tf.signal.stft(inp, wl, hl, fft_length=wl)
+    power = tf.abs(spec)**2
+    mel = tf.transpose(tf.matmul(power, melmat), [0, 2, 1])
+    return tf.math.log(mel + 1e-11)
