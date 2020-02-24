@@ -29,7 +29,8 @@ class W2L:
             print("Model directory already exists. Loading last model...")
             last = self.get_last_model()
             self.model = tf.keras.models.load_model(
-                os.path.join(model_dir, last))
+                os.path.join(model_dir, last),
+                custom_objects={"Conv1DTranspose": Conv1DTranspose})
             self.step = int(last[:-3])
             print("...loaded {}.".format(last))
         else:
@@ -272,7 +273,7 @@ class W2L:
 
             self.step += 1
 
-        self.model.save_weights(os.path.join(
+        self.model.save(os.path.join(
             self.model_dir, str(self.step).zfill(6) + ".h5"))
 
     def get_last_model(self):
@@ -471,7 +472,7 @@ class Conv1DTranspose(layers.Conv1D):
                                           output_padding=out_pad_h,
                                           stride=stride_h,
                                           dilation=
-                                          self.dilation_rate)
+                                          self.dilation_rate[0])
         if self.data_format == 'channels_first':
             output_shape = (batch_size, self.filters, out_height)
         else:
@@ -483,7 +484,7 @@ class Conv1DTranspose(layers.Conv1D):
             self.kernel,
             output_shape_tensor,
             strides=self.strides,
-            padding=self.padding,
+            padding=self.padding.upper(),
             data_format=convert_data_format(self.data_format,
                                                 ndim=3),
             dilations=self.dilation_rate)
