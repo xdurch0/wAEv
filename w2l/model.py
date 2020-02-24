@@ -461,9 +461,9 @@ class Conv1DTranspose(layers.Conv1D):
         stride_h, = self.strides
 
         if self.output_padding is None:
-            out_pad_h = out_pad_w = None
+            out_pad_h = None
         else:
-            out_pad_h, out_pad_w = self.output_padding
+            out_pad_h = self.output_padding
 
         # Infer the dynamic output shape:
         out_height = deconv_output_length(height,
@@ -471,8 +471,7 @@ class Conv1DTranspose(layers.Conv1D):
                                           padding=self.padding,
                                           output_padding=out_pad_h,
                                           stride=stride_h,
-                                          dilation=
-                                          self.dilation_rate[0])
+                                          dilation=self.dilation_rate[0])
         if self.data_format == 'channels_first':
             output_shape = (batch_size, self.filters, out_height)
         else:
@@ -485,8 +484,7 @@ class Conv1DTranspose(layers.Conv1D):
             output_shape_tensor,
             strides=self.strides,
             padding=self.padding.upper(),
-            data_format=convert_data_format(self.data_format,
-                                                ndim=3),
+            data_format=convert_data_format(self.data_format, ndim=3),
             dilations=self.dilation_rate)
 
         if not tf.executing_eagerly():
@@ -609,8 +607,8 @@ def deconv_output_length(input_length,
         input_length: Integer.
         filter_size: Integer.
         padding: one of `"same"`, `"valid"`, `"full"`.
-        output_padding: Integer, amount of padding along the output dimension. Can
-          be set to `None` in which case the output length is inferred.
+        output_padding: Integer, amount of padding along the output dimension.
+          Can be set to `None` in which case the output length is inferred.
         stride: Integer.
         dilation: Integer.
     Returns:
