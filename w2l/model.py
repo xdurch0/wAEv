@@ -143,15 +143,18 @@ class W2L:
             audio = tf.transpose(audio, [0, 2, 1])
 
         out = self.model(audio, training=training)
+        out = tf.transpose(out[-1], [0, 2, 1])
+        out = ddsp.core.resample(out, 2*out.shape[1])
+        out = out[:, :-1, :]
         # TODO data format, hop size
-        synth = ddsp.synths.Additive((int(audio.shape[-1])-1)*160)
+        synth = ddsp.synths.Additive((2*int(audio.shape[-1])-1)*160)
 
-        amps, harm, f0 = tf.split(tf.transpose(out[-1], [0, 2, 1]), 3, axis=2)
+        amps, harm, f0 = tf.split(out, 3, axis=2)
         f0 = 300*tf.nn.sigmoid(f0)
         recon = synth(amps, harm, f0)
 
         if return_all:
-            return out + [recon]
+            return [out] + [recon]
         else:
             return recon
 
@@ -174,7 +177,7 @@ class W2L:
             # after this we need logits in shape time x batch_size x vocab_size
             # TODO mask, i.e. do not compute for padding
             tospec = raw_tf_mel(recon, 16000, 400, 160, 128)
-            
+
             loss = tf.reduce_mean(tf.math.squared_difference(tospec, audio))
             # audio_length = tf.cast(audio_length / 2, tf.int32)
 
