@@ -25,7 +25,7 @@ class W2L:
         self.cf = self.data_format == "channels_first"
         self.n_channels = n_channels
         self.vocab_size = vocab_size
-        self.hidden_dim = 48  # TODO don't hardcode
+        self.hidden_dim = 18  # TODO don't hardcode
 
         if os.path.isdir(model_dir) and os.listdir(model_dir):
             print("Model directory already exists. Loading last model...")
@@ -147,9 +147,13 @@ class W2L:
         out = ddsp.core.resample(out, 2*out.shape[1])
         out = out[:, :-1, :]
         # TODO data format, hop size
-        synth = ddsp.synths.Additive((2*int(audio.shape[-1])-1)*160)
+        synth = ddsp.synths.Additive((int(audio.shape[-1])-1)*160)
 
-        amps, harm, f0 = tf.split(out, 3, axis=2)
+        #amps, harm, f0 = tf.split(out, 3, axis=2)
+        amps = out[:, :, 0:1]
+        harm = out[:, :, 1:-1]
+        f0 = out[:, : -1:]
+        # TODO how to constrain??
         f0 = 300*tf.nn.sigmoid(f0)
         recon = synth(amps, harm, f0)
 
