@@ -127,7 +127,7 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
         1D array (label_len)
 
     """
-    array = np.load(file_name.decode("utf-8"))
+    array = np.load(file_name.decode("utf-8"))[:400]
     trans_mapped = np.array([vocab[ch] for ch in trans.decode("utf-8")],
                             dtype=np.int32)
     length = np.int32(array.shape[-1])
