@@ -157,9 +157,11 @@ def preprocess_audio(csv_path, corpus_path, array_dir, n_freqs=128,
             if sr != 16000:
                 raise ValueError("Sampling rate != 16000 found in "
                                  "{}!".format(path))
-
-            logmel = raw_to_mel(audio, sr, window_size, hop_length, n_freqs,
-                                normalize)
+            if n_freqs == 1:
+                logmel = audio[None]  # just add a fake channel axis...
+            else:
+                logmel = raw_to_mel(audio, sr, window_size, hop_length, n_freqs,
+                                    normalize)
             np.save(os.path.join(array_dir, fid + ".npy"),
                     logmel.astype(np.float32))
             if not n % 1000:
