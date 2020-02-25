@@ -152,7 +152,7 @@ class W2L:
         #amps, harm, f0 = tf.split(out, 3, axis=2)
         amps = out[:, :, 0:1]
         harm = out[:, :, 1:-1]
-        f0 = out[:, : -1:]
+        f0 = out[:, :, -1:]
         # TODO how to constrain??
         f0 = 300*tf.nn.sigmoid(f0)
         recon = synth(amps, harm, f0)
