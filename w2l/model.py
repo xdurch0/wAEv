@@ -25,7 +25,7 @@ class W2L:
         self.cf = self.data_format == "channels_first"
         self.n_channels = n_channels
         self.vocab_size = vocab_size
-        self.hidden_dim = 18  # TODO don't hardcode
+        self.hidden_dim = 34  # TODO don't hardcode
 
         if os.path.isdir(model_dir) and os.listdir(model_dir):
             print("Model directory already exists. Loading last model...")
@@ -148,14 +148,19 @@ class W2L:
         out = out[:, :-1, :]
         # TODO data format, hop size
         synth = ddsp.synths.Additive((int(audio.shape[-1])-1)*160)
+        noise = ddsp.synths.FilteredNoise((int(audio.shape[-1])-1)*160,
+                                          160)
 
         #amps, harm, f0 = tf.split(out, 3, axis=2)
         amps = out[:, :, 0:1]
-        harm = out[:, :, 1:-1]
-        f0 = out[:, :, -1:]
+        harm = out[:, :, 1:17]
+        f0 = out[:, :, 17:18]
         # TODO how to constrain??
         f0 = 300*tf.nn.sigmoid(f0)
         recon = synth(amps, harm, f0)
+
+        noise_mag = out[:, :, 18:]
+        recon = 0.5*(recon + noise(noise_mag))
 
         if return_all:
             return [out] + [recon]
@@ -181,6 +186,7 @@ class W2L:
             # after this we need logits in shape time x batch_size x vocab_size
             # TODO mask, i.e. do not compute for padding
             tospec = raw_tf_mel(recon, 16000, 400, 160, 128)
+            audio = tf.exp(audio)  # TODO do this before inputting to the model?
 
             loss = tf.reduce_mean(tf.math.squared_difference(tospec, audio))
             # audio_length = tf.cast(audio_length / 2, tf.int32)
@@ -624,4 +630,5 @@ def raw_tf_mel(inp_batch, sr, wl, hl, nf):
     spec = tf.signal.stft(inp, wl, hl, fft_length=wl)
     power = tf.abs(spec)**2
     mel = tf.transpose(tf.matmul(power, melmat), [0, 2, 1])
-    return tf.math.log(mel + 1e-11)
+    return mel
+    #return tf.math.log(mel + 1e-11)
