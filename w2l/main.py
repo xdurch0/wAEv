@@ -56,7 +56,7 @@ def run_asr(mode, data_config, model_dir, data_format="channels_first",
                 layer_list = model.forward(
                     features["audio"], return_all=True)
 
-                for ind in range(len(layer_list)):
+                for ind in range(layer_list[0].shape[0]):
                     predictions_repacked = dict()
                     predictions_repacked["input_length"] = features["length"][ind]
 

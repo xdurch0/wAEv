@@ -85,7 +85,7 @@ def w2l_input_fn_npy(csv_path, array_base_path, which_sets, train, vocab,
     # NOTE 2: changing padding value of -1 for element 2 requires changes
     # in the model as well!
     pad_shapes = ((n_freqs, -1), (), (-1,), ())
-    pad_values = (np.log(1e-11).astype(np.float32), 0, -1, 0)
+    pad_values = (0., 0, -1, 0)
     data = data.padded_batch(
         batch_size, padded_shapes=pad_shapes, padding_values=pad_values)
     map_fn = pack_inputs_in_dict
@@ -127,7 +127,7 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
         1D array (label_len)
 
     """
-    array = np.load(file_name.decode("utf-8"))[:400]
+    array = np.load(file_name.decode("utf-8"))[:, :64000]
     trans_mapped = np.array([vocab[ch] for ch in trans.decode("utf-8")],
                             dtype=np.int32)
     length = np.int32(array.shape[-1])
@@ -135,7 +135,7 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
 
     if array.shape[1] % 2:
         array = np.pad(array, ((0, 0), (0, 1)), mode="constant",
-                       constant_values=np.log(1e-11))
+                       constant_values=0)
 
     if threshold:
         clip_val = np.max(array) - threshold

@@ -25,7 +25,8 @@ class W2L:
         self.cf = self.data_format == "channels_first"
         self.n_channels = n_channels
         self.vocab_size = vocab_size
-        self.hidden_dim = 34  # TODO don't hardcode
+        # no of harmonics + no of noise bands + (amps + f0)
+        self.hidden_dim = 30 + 30 + 2  # TODO don't hardcode
 
         if os.path.isdir(model_dir) and os.listdir(model_dir):
             print("Model directory already exists. Loading last model...")
@@ -139,6 +140,7 @@ class W2L:
             return_all).
 
         """
+        audio = raw_tf_mel(audio, 16000, 400, 160, self.n_channels)
         if not self.cf:
             audio = tf.transpose(audio, [0, 2, 1])
 
@@ -153,13 +155,13 @@ class W2L:
 
         #amps, harm, f0 = tf.split(out, 3, axis=2)
         amps = out[:, :, 0:1]
-        harm = out[:, :, 1:17]
-        f0 = out[:, :, 17:18]
+        harm = out[:, :, 1:31]
+        f0 = out[:, :, 31:32]
         # TODO how to constrain??
         f0 = 300*tf.nn.sigmoid(f0)
         recon = synth(amps, harm, f0)
 
-        noise_mag = out[:, :, 18:]
+        noise_mag = out[:, :, 32:]
         recon = 0.5*(recon + noise(noise_mag))
 
         if return_all:
@@ -184,12 +186,8 @@ class W2L:
         with tf.GradientTape() as tape:
             recon = self.forward(audio, training=True, return_all=False)
             # after this we need logits in shape time x batch_size x vocab_size
-            # TODO mask, i.e. do not compute for padding
-            tospec = raw_tf_mel(recon, 16000, 400, 160, 128)
-            audio = tf.exp(audio)  # TODO do this before inputting to the model?
-
-            loss = tf.reduce_mean(tf.math.squared_difference(tospec, audio))
-            # audio_length = tf.cast(audio_length / 2, tf.int32)
+            # TODO mask loss, i.e. do not compute for padding
+            loss = multiscale_loss(audio, recon)
 
         grads = tape.gradient(loss, self.model.trainable_variables)
         optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
@@ -630,5 +628,24 @@ def raw_tf_mel(inp_batch, sr, wl, hl, nf):
     spec = tf.signal.stft(inp, wl, hl, fft_length=wl)
     power = tf.abs(spec)**2
     mel = tf.transpose(tf.matmul(power, melmat), [0, 2, 1])
-    return mel
-    #return tf.math.log(mel + 1e-11)
+    return tf.math.log(mel + 1e-8)
+
+
+def raw_tf_speck(inp_batch, wl, hl):
+    inp = tf.pad(inp_batch, [[0, 0], [wl//2, wl//2]], mode="reflect")
+    spec = tf.signal.stft(inp, wl, hl, fft_length=wl)
+    power = tf.abs(spec)**2  # do we need power?
+    return power
+
+
+def multiscale_loss(target, out, sizes=(256, 512, 1024), use_log=True,
+                    diff_fn=tf.math.squared_difference):
+    total_loss = 0
+    for s in sizes:
+        target_spec = raw_tf_speck(target, s, s//4)
+        out_spec = raw_tf_speck(out, s, s//4)
+        total_loss += tf.reduce_mean(diff_fn(target_spec, out_spec))
+        if use_log:
+            total_loss += tf.reduce_mean(diff_fn(
+                tf.math.log(target_spec + 1e-8), tf.math.log(out_spec + 1e-8)))
+    return total_loss / len(sizes)
