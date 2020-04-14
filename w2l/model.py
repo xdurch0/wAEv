@@ -8,6 +8,7 @@ import tensorflow_probability as tfp
 import numpy as np
 import librosa
 import ddsp
+import crepe
 
 GRIDS = {16: (4, 4), 32: (8, 4), 64: (8, 8), 128: (16, 8), 256: (16, 16),
          512: (32, 16), 1024: (32, 32), 2048: (64, 32)}
@@ -125,7 +126,7 @@ class W2L:
 
         return w2l
 
-    def forward(self, audio, training=False, return_all=False):
+    def forward(self, audio, f0, training=False, return_all=False, tape=None):
         """Simple forward pass of a W2L model to compute logits.
 
         Parameters:
@@ -134,33 +135,36 @@ class W2L:
                       Important for batchnorm to work properly.
             return_all: Bool, if true, return list of all layer activations
                         (post-relu), with the logits at the very end.
+            tape: Gradient tape used in training. Needed to avoid dumb crash
+                           with CREPE (crap more like, am I right?? lol).
+                           Leave None when not training!
 
         Returns:
             Result of applying model to audio (list or tensor depending on
             return_all).
 
         """
-        audio = raw_tf_mel(audio, 16000, 400, 160, self.n_channels)
+        audio = audio[:, 0, :]
+        audio_len = int(audio.shape[-1])
+        audio_mel = raw_tf_mel(audio, 16000, 400, 160, self.n_channels)
         if not self.cf:
-            audio = tf.transpose(audio, [0, 2, 1])
+            audio_mel = tf.transpose(audio_mel, [0, 2, 1])
 
-        out = self.model(audio, training=training)
+        out = self.model(audio_mel, training=training)
         out = tf.transpose(out[-1], [0, 2, 1])
-        out = ddsp.core.resample(out, 2*out.shape[1])
         out = out[:, :-1, :]
         # TODO data format, hop size
-        synth = ddsp.synths.Additive((int(audio.shape[-1])-1)*160)
-        noise = ddsp.synths.FilteredNoise((int(audio.shape[-1])-1)*160,
-                                          160)
+        synth = ddsp.synths.Additive(audio_len)
+        noise = ddsp.synths.FilteredNoise(audio_len, 160)
 
-        #amps, harm, f0 = tf.split(out, 3, axis=2)
         amps = out[:, :, 0:1]
         harm = out[:, :, 1:31]
-        f0 = out[:, :, 31:32]
+        #f0 = out[:, :, 31:32]
         # TODO how to constrain??
-        f0 = 300*tf.nn.sigmoid(f0)
-        recon = synth(amps, harm, f0)
+        #f0 = 300*tf.nn.sigmoid(f0)
+        f0 = tf.convert_to_tensor(f0[:, -1, None])
 
+        recon = synth(amps, harm, f0)
         noise_mag = out[:, :, 32:]
         recon = 0.5*(recon + noise(noise_mag))
 
@@ -169,7 +173,7 @@ class W2L:
         else:
             return recon
 
-    def train_step(self, audio, audio_length, optimizer, on_gpu):
+    def train_step(self, audio, audio_length, f0, optimizer, on_gpu):
         """Implements train step of the W2L model.
 
         Parameters:
@@ -184,10 +188,11 @@ class W2L:
 
         """
         with tf.GradientTape() as tape:
-            recon = self.forward(audio, training=True, return_all=False)
+            recon = self.forward(audio, f0, training=True, return_all=False,
+                                 tape=tape)
             # after this we need logits in shape time x batch_size x vocab_size
             # TODO mask loss, i.e. do not compute for padding
-            loss = multiscale_loss(audio, recon)
+            loss = multiscale_loss(audio[, 0, :], recon)
 
         grads = tape.gradient(loss, self.model.trainable_variables)
         optimizer.apply_gradients(zip(grads, self.model.trainable_variables))
@@ -224,8 +229,8 @@ class W2L:
         audio_shape = [None, self.n_channels, None] if self.cf \
             else [None, None, self.n_channels]
 
-        def train_fn(w, x):
-            return self.train_step(w, x, opt, on_gpu)
+        def train_fn(aud, leng, f0):
+            return self.train_step(aud, leng, f0, opt, on_gpu)
 
         #graph_train = tf.function(
         #    train_fn, input_signature=[tf.TensorSpec(audio_shape, tf.float32),
@@ -649,3 +654,59 @@ def multiscale_loss(target, out, sizes=(256, 512, 1024), use_log=True,
             total_loss += tf.reduce_mean(diff_fn(
                 tf.math.log(target_spec + 1e-8), tf.math.log(out_spec + 1e-8)))
     return total_loss / len(sizes)
+
+
+class WavetableCC(ddsp.processors.Processor):
+  """Synthesize audio from a series of wavetables."""
+
+  def __init__(self,
+               n_samples=64000,
+               sample_rate=16000,
+               scale_fn=ddsp.core.exp_sigmoid,
+               name='wavetable'):
+    super(WavetableCC, self).__init__(name=name)
+    self.n_samples = n_samples
+    self.sample_rate = sample_rate
+    self.scale_fn = scale_fn
+
+  def get_controls(self,
+                   amplitudes,
+                   wavetables,
+                   f0_hz):
+    """Convert network output tensors into a dictionary of synthesizer controls.
+    Args:
+      amplitudes: 3-D Tensor of synthesizer controls, of shape
+        [batch, time, 1].
+      wavetables: 3-D Tensor of synthesizer controls, of shape
+        [batch, time, n_harmonics].
+      f0_hz: Fundamental frequencies in hertz. Shape [batch, time, 1].
+    Returns:
+      controls: Dictionary of tensors of synthesizer controls.
+    """
+    # Scale the amplitudes.
+    if self.scale_fn is not None:
+      amplitudes = self.scale_fn(amplitudes)
+      wavetables = self.scale_fn(wavetables) - 1
+
+    return  {'amplitudes': amplitudes,
+             'wavetables': wavetables,
+             'f0_hz': f0_hz}
+
+  def get_signal(self, amplitudes, wavetables, f0_hz):
+    """Synthesize audio with additive synthesizer from controls.
+    Args:
+      amplitudes: Amplitude tensor of shape [batch, n_frames, 1]. Expects
+        float32 that is strictly positive.
+      wavetables: Tensor of shape [batch, n_frames, n_wavetable].
+      f0_hz: The fundamental frequency in Hertz. Tensor of shape [batch,
+        n_frames, 1].
+    Returns:
+      signal: A tensor of of shape [batch, n_samples].
+    """
+    wavetables = ddsp.core.resample(wavetables, self.n_samples)
+    signal = ddsp.core.wavetable_synthesis(amplitudes=amplitudes,
+                                      wavetables=wavetables,
+                                      frequencies=f0_hz,
+                                      n_samples=self.n_samples,
+                                      sample_rate=self.sample_rate)
+    return signal

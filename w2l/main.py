@@ -54,7 +54,7 @@ def run_asr(mode, data_config, model_dir, data_format="channels_first",
         def gen():
             for features, labels in dataset:
                 layer_list = model.forward(
-                    features["audio"], return_all=True)
+                    features["audio"], features["f0"], return_all=True)
 
                 for ind in range(layer_list[0].shape[0]):
                     predictions_repacked = dict()

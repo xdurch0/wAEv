@@ -75,17 +75,17 @@ def w2l_input_fn_npy(csv_path, array_base_path, which_sets, train, vocab,
         data = data.apply(
             tf.data.experimental.shuffle_and_repeat(buffer_size=2 ** 18))
 
-    output_types = [tf.float32, tf.int32, tf.int32, tf.int32]
+    output_types = [tf.float32, tf.int32, tf.float32, tf.int32, tf.int32]
     data = data.map(
         lambda fid, trans: tuple(tf.numpy_function(
             _to_arrays, [fid, trans], output_types)),
         num_parallel_calls=3)
-    # NOTE 1: padding value of 0 for element 1 and 3 is just a dummy (since
+    # NOTE 1: padding value of 0 for element 1 and 4 is just a dummy (since
     #         sequence lengths are always scalar)
-    # NOTE 2: changing padding value of -1 for element 2 requires changes
+    # NOTE 2: changing padding value of -1 for element 3 requires changes
     # in the model as well!
-    pad_shapes = ((n_freqs, -1), (), (-1,), ())
-    pad_values = (0., 0, -1, 0)
+    pad_shapes = ((n_freqs, -1), (), (-1,), (-1,), ())
+    pad_values = (0., 0, 0., -1, 0)
     data = data.padded_batch(
         batch_size, padded_shapes=pad_shapes, padding_values=pad_values)
     map_fn = pack_inputs_in_dict
@@ -127,11 +127,14 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
         1D array (label_len)
 
     """
-    array = np.load(file_name.decode("utf-8"))[:, :64000]
+    arr_path = file_name.decode("utf-8")
+    array = np.load(arr_path)[:, :64000]
     trans_mapped = np.array([vocab[ch] for ch in trans.decode("utf-8")],
                             dtype=np.int32)
     length = np.int32(array.shape[-1])
     trans_length = np.int32(len(trans_mapped))
+
+    f0 = np.load(os.path.join("/cache/EnglishF0", os.path.split(arr_path)[-1]))[:201]
 
     if array.shape[1] % 2:
         array = np.pad(array, ((0, 0), (0, 1)), mode="constant",
@@ -143,13 +146,13 @@ def _pyfunc_load_arrays_map_transcriptions(file_name, trans, vocab,
     if normalize:
         array = (array - np.mean(array)) / np.std(array)
 
-    return_vals = (array.astype(np.float32), length, trans_mapped,
+    return_vals = (array.astype(np.float32), length, f0.astype(np.float32), trans_mapped,
                    trans_length)
 
     return return_vals
 
 
-def pack_inputs_in_dict(audio, length, trans, trans_length):
+def pack_inputs_in_dict(audio, length, f0, trans, trans_length):
     """For estimator interface (only allows one input -> pack into dict)."""
-    return ({"audio": audio, "length": length},
+    return ({"audio": audio, "length": length, "f0": f0},
             {"transcription": trans, "length": trans_length})
